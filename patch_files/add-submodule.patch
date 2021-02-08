@@ -1,0 +1,102 @@
+From 11e4ca667a214ba515f077b9b948fdbce5f9da29 Mon Sep 17 00:00:00 2001
+From: Unknown
+Date: Wed, 15 Jul 2020 22:24:13 +0200
+Subject: [PATCH] to patch
+
+move submodule back to master
+---
+ .gitmodules    |  3 +++
+ CMakeLists.txt |  4 +++-
+ main.cpp       | 30 +++++++++++++-----------------
+ rabbit_order   |  1 +
+ 4 files changed, 20 insertions(+), 18 deletions(-)
+ create mode 100644 .gitmodules
+ create mode 160000 rabbit_order
+
+diff --git a/.gitmodules b/.gitmodules
+new file mode 100644
+index 0000000..3be9e40
+--- /dev/null
++++ b/.gitmodules
+@@ -0,0 +1,3 @@
++[submodule "rabbit_order"]
++	path = rabbit_order
++	url = https://github.com/araij/rabbit_order
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 71d6b44..ddb7981 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -16,11 +16,13 @@ find_package(Boost 1.62.0 REQUIRED)
+ find_package(gflags 2.1.2 REQUIRED)
+ 
+ add_library(converter converter/conversions.cpp converter/conversions.hpp converter/util.cpp converter/util.hpp converter/shuffler.cpp converter/shuffler.hpp)
++add_library(rabbit_order rabbit_order/edge_list.hpp rabbit_order/reorder.hpp rabbit_order/rabbit_order.hpp)
++set_target_properties(rabbit_order PROPERTIES LINKER_LANGUAGE CXX)
+ 
+ add_executable(twophasepartitioner main.cpp globals.cpp twophasepartitioner.cpp stats.cpp streamcom.cpp)
+ add_executable(modularity modularity_calculator/main.cpp)
+ add_executable(dbh dbh/main.cpp dbh/dbh.cpp dbh/dbh.hpp dbh/globals.cpp dbh/globals.hpp dbh/stats.cpp dbh/stats.hpp)
+ 
+-target_link_libraries(twophasepartitioner converter glog gflags)
++target_link_libraries(twophasepartitioner converter rabbit_order glog gflags numa tcmalloc_minimal)
+ target_link_libraries(modularity gflags)
+ target_link_libraries(dbh converter glog gflags)
+\ No newline at end of file
+diff --git a/main.cpp b/main.cpp
+index 987ed80..92b3301 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -8,7 +8,7 @@
+ #include "twophasepartitioner.hpp"
+ #include "streamcom.hpp"
+ #include "converter/conversions.hpp"
+-//#include "rabbit_order/reorder.hpp"
++#include "rabbit_order/reorder.hpp"
+ 
+ #include "converter/shuffler.hpp"
+ 
+@@ -87,22 +87,18 @@ void start_partitioning(Globals &globals, TwoPhasePartitioner &partitioner, std:
+             // get volumes of the communities
+             volumes = streamcom.get_volumes();
+         }
+-        /* Due to the licencing of Rabbit Order source code, we cannot add modified Rabbit Order implementation
+-        * to the repo. Please follow instructions on README.md if you want to enable Rabbit Order clustering as the
+-        * first phase of 2PS algorithm
+-        * 
+-        *else if (FLAGS_prepartitioner_type == "rabbit")
+-        *{
+-        *    volumes.resize(globals.NUM_VERTICES, 0);
+-        *    communities.reserve(globals.NUM_VERTICES);
+-        *    auto pcommunities = perform_rabbit_clustering(binedgelist, static_cast<float>(globals.MAX_COM_VOLUME));
+-        *    for (uint32_t v_idx = 0; v_idx < globals.NUM_VERTICES; v_idx++)
+-        *    {
+-        *        communities.push_back(pcommunities[v_idx]);
+-        *        auto com = communities[v_idx];
+-        *        volumes[com] += globals.DEGREES[v_idx]; 
+-        *    }
+-        }*/
++        else if (FLAGS_prepartitioner_type == "rabbit")
++        {
++            volumes.resize(globals.NUM_VERTICES, 0);
++            communities.reserve(globals.NUM_VERTICES);
++            auto pcommunities = perform_rabbit_clustering(binedgelist, static_cast<float>(globals.MAX_COM_VOLUME));
++            for (uint32_t v_idx = 0; v_idx < globals.NUM_VERTICES; v_idx++)
++            {
++                communities.push_back(pcommunities[v_idx]);
++                auto com = communities[v_idx];
++                volumes[com] += globals.DEGREES[v_idx]; 
++            }
++        }
+         else 
+         {
+             LOG(ERROR) << "Only str is supported as a prepartitioner";
+diff --git a/rabbit_order b/rabbit_order
+new file mode 160000
+index 0000000..f67a79e
+--- /dev/null
++++ b/rabbit_order
+@@ -0,0 +1 @@
++Subproject commit f67a79e427e2a06e72f6b528fd5464dfe8a43174
+-- 
+2.15.0
+

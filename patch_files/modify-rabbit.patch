@@ -1,0 +1,486 @@
+From 2fbe80933ddfe1417809c06e1f43264b7fc72da8 Mon Sep 17 00:00:00 2001
+From: Unknown
+Date: Wed, 15 Jul 2020 22:41:51 +0200
+Subject: [PATCH] update rabbit order
+
+update rabbit inc. del
+---
+ README.md                           | 104 ------------------------------------
+ demo/Makefile                       |  23 --------
+ demo/edge_list.hpp => edge_list.hpp |  38 ++++++++++++-
+ rabbit_order.hpp                    |  39 +++++++++-----
+ demo/reorder.cc => reorder.hpp      |  68 ++++++++++-------------
+ 5 files changed, 90 insertions(+), 182 deletions(-)
+ delete mode 100644 README.md
+ delete mode 100644 demo/Makefile
+ rename demo/edge_list.hpp => edge_list.hpp (80%)
+ mode change 100644 => 100755
+ mode change 100644 => 100755 rabbit_order.hpp
+ rename demo/reorder.cc => reorder.hpp (81%)
+ mode change 100644 => 100755
+
+diff --git a/README.md b/README.md
+deleted file mode 100644
+index a8146ab..0000000
+--- a/README.md
++++ /dev/null
+@@ -1,104 +0,0 @@
+-Rabbit Order
+-============
+-
+-- This is an implementation of the algorithm proposed in the following paper:
+-    - J. Arai, H. Shiokawa, T. Yamamuro, M. Onizuka, and S. Iwamura.
+-      Rabbit Order: Just-in-time Parallel Reordering for Fast Graph Analysis.
+-      IEEE International Parallel and Distributed Processing Symposium (IPDPS),
+-      2016.
+-- Please read `license.txt` before reading or using the files.
+-- Note that some graph datasets are already reordered, and so Rabbit Order will
+-  not show significant performance improvement on those graphs.
+-    - For example, [Laboratory for Web Algorithmics](http://law.di.unimi.it/)
+-      reorders graphs using the Layered Label Propagation algorithm.
+-    - Web graphs are sometimes reordered by URL. This ordering is known to show
+-      good locality.
+-
+-
+-How to use
+-----------
+-
+-`demo/reorder.cc` is a sample program that reorders graphs by using Rabbit
+-Order.
+-Type `make` in the `demo/` directory to build the program.
+-
+-### Requirements
+-
+-- g++ (4.9.2)
+-- Boost C++ library (1.58.0)
+-- libnuma (2.0.9)
+-- libtcmalloc\_minimal in google-perftools (2.1)
+-
+-Numbers in each parenthesis are the oldest versions that we used to test this
+-program.
+-
+-### Usage
+-
+-    Usage: reorder [-c] GRAPH_FILE
+-      -c    Print community IDs instead of a new ordering
+-
+-If flag `-c` is given, this program runs in the *clustering mode*
+-(described later); otherwise, it runs in the *reordering mode*.
+-
+-### Input
+-
+-`GRAPH_FILE` has to be an edge-list file like the following:
+-
+-    14 10
+-    2 194
+-    14 1
+-    89 20
+-    ...
+-
+-Each line represents an edge.
+-The first number is a source vertex ID, and the second number is a target
+-vertex ID.
+-Edges do not need to be sorted in some orderings, but **vertex IDs should be
+-zero-based contiguous numbers (i.e., 0, 1, 2, ...)**; otherwise, this demo
+-program may consume more memory and show lower performance.
+-
+-Many edge-list files in this format are found in
+-[Stanford Large Network Dataset Collection] (http://snap.stanford.edu/data/index.html).
+-
+-### Output (reordering mode)
+-
+-The program prints a new ordering as follows:
+-
+-    8
+-    16
+-    1
+-    4
+-    ...
+-
+-These lines represent the following permutation:
+-
+-    Vertex 0 ==> Vertex 8
+-    Vertex 1 ==> Vertex 16
+-    Vertex 2 ==> Vertex 1
+-    Vertex 3 ==> Vertex 4
+-    ...
+-
+-### Output (clustering mode)
+-
+-The program prints a clustering result as follows:
+-
+-    1
+-    5
+-    1
+-    5
+-    5
+-    9
+-    ...
+-
+-These lines represent the following classification:
+-
+-    Vertex 0 ==> Cluster 1
+-    Vertex 1 ==> Cluster 5
+-    Vertex 2 ==> Cluster 1
+-    Vertex 3 ==> Cluster 5
+-    Vertex 4 ==> Cluster 5
+-    Vertex 5 ==> Cluster 9
+-    ...
+-
+-Note that the cluster IDs may be non-contiguous.
+-
+diff --git a/demo/Makefile b/demo/Makefile
+deleted file mode 100644
+index 3ff790b..0000000
+--- a/demo/Makefile
++++ /dev/null
+@@ -1,23 +0,0 @@
+-CXXFLAGS += -Wall -Wextra -Wcast-align -Wcast-qual -Wconversion -Wfloat-equal \
+-	    -Wformat=2 -Winit-self -Wmissing-declarations \
+-	    -Wmissing-include-dirs -Wpointer-arith -Wredundant-decls \
+-	    -Wswitch-default -Wuninitialized -Wwrite-strings \
+-	    -Wno-sign-conversion -Wno-unused-function \
+-            -Wno-missing-declarations \
+-            -fopenmp -std=c++14 -mcx16 -O3 -DNDEBUG 
+-LDLIBS   += -ltcmalloc_minimal -lnuma
+-TARGETS   = reorder
+-
+-$(TARGETS): %: %.cc
+-	$(LINK.cc) -MD -o $@ $< $(LDLIBS)
+-	@cp $*.d .$*.P; \
+-	  sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+-	      -e '/^$$/ d' -e 's/$$/ :/' < $*.d >> .$*.P; \
+-	  rm -f $*.d
+-
+-.PHONY: clean
+-clean:
+-	$(RM) $(TARGETS) $(TARGETS:%=.%.P)
+-
+--include .*.P
+-
+diff --git a/demo/edge_list.hpp b/edge_list.hpp
+old mode 100644
+new mode 100755
+similarity index 80%
+rename from demo/edge_list.hpp
+rename to edge_list.hpp
+index 39ad8d4..3984b13
+--- a/demo/edge_list.hpp
++++ b/edge_list.hpp
+@@ -11,7 +11,9 @@
+ #include <unistd.h>
+ #include <fcntl.h>
+ #include <unordered_map>
+-#include "../rabbit_order.hpp"
++#include "rabbit_order.hpp"
++
++#include <fstream>
+ 
+ namespace edge_list {
+ namespace aux {
+@@ -76,7 +78,7 @@ struct edge_parser {
+     const vint s = eat_id();
+     eat_separator();
+     const vint t = eat_id();
+-    return edge {s, t, 1.0};  // FIXME: edge weight is not supported so far
++    return edge {s, t, 1.0f};  // FIXME: edge weight is not supported so far
+   }
+ 
+   vint eat_id() {
+@@ -117,7 +119,37 @@ struct edge_parser {
+   }
+ };
+ 
++struct edge_t 
++{
++  vint first, second;
++};
++
++std::vector<edge> read_binary(const std::string& path)
++{
++  const clock_t begin_time = std::clock();
++  std::ifstream fin(path, std::ios::binary | std::ios::ate);
++  fin.seekg(0, std::ios::beg);
++
++  uint32_t num_vertices;
++  size_t num_edges;
++  fin.read((char *)&num_vertices, sizeof(num_vertices));
++  fin.read((char *)&num_edges, sizeof(num_edges));
++
++  std::vector<edge> edges;
++  edges.reserve(num_edges);
++  for (size_t i = 0; i < num_edges; i++)
++  {
++    edge_t e;
++    fin.read((char *)&e, sizeof(edge_t));
++    edges.push_back({e.first, e.second, 1.0f});
++  }
++  
++  std::cout << "Runtime for reading edges from binary file [sec]: " << float(std::clock() - begin_time) / CLOCKS_PER_SEC << "\n";
++  return edges;
++}
++
+ std::vector<edge> read(const std::string& path) {
++  const clock_t begin_time = std::clock();
+   const file_desc    fd(path);
+   const mmapped_file mm(fd);
+   const int          nthread = omp_get_max_threads();
+@@ -156,6 +188,7 @@ std::vector<edge> read(const std::string& path) {
+   for (int t = 0; t < nthread; ++t)
+     boost::copy(eparts[t], edges.begin() + eheads[t]);
+ 
++    std::cout << "time to read from txt file: " << float(std::clock() - begin_time) / CLOCKS_PER_SEC << "\n";
+   return edges;
+ }
+ 
+@@ -163,6 +196,7 @@ std::vector<edge> read(const std::string& path) {
+ 
+ using aux::edge;
+ using aux::read;
++using aux::read_binary;
+ 
+ }  // namespace edge_list
+ 
+diff --git a/rabbit_order.hpp b/rabbit_order.hpp
+old mode 100644
+new mode 100755
+index f70717a..3ac66cf
+--- a/rabbit_order.hpp
++++ b/rabbit_order.hpp
+@@ -449,10 +449,10 @@ void unite(const vint v, std::vector<edge>* const nbrs, graph* const g) {
+ }
+ 
+ //
+-// Returns a vertex that yields the best modularity improvement when it is
++// Returns a vertex that yields the best modularity_calculator improvement when it is
+ // merged with `v`.
+ //
+-vint find_best(const graph& g, const vint v, const double vstr) {
++vint find_best(const graph& g, const vint v, const double vstr, float max_com_vol) {
+   double dmax = 0.0;
+   vint   best = v;
+   for (const edge e : g.es[v]) {
+@@ -460,6 +460,12 @@ vint find_best(const graph& g, const vint v, const double vstr) {
+         static_cast<double>(e.second) - vstr * g.vs[e.first].a->str / g.tot_wgt;
+     if (dmax < d) {
+       dmax = d;
++      
++      // The degree volume of e.first's community is more than or equal to max community volume.
++      // Not any other community should be merged to it. 
++      if (max_com_vol != 0.0f && g.vs[e.first].a->str >= max_com_vol) {
++        continue;
++      }
+       best = e.first;
+     }
+   }
+@@ -470,17 +476,17 @@ vint find_best(const graph& g, const vint v, const double vstr) {
+ // Merges `v` into one of the neighbors of `v`
+ //
+ // [Return value]
+-// `v`    : `v` is not merged since it has no neighbor that improves modularity
++// `v`    : `v` is not merged since it has no neighbor that improves modularity_calculator
+ // `vmax` : `v` is not merged due to contention with another threads
+ // others : `v` is merged into a vertex represented by the return value
+ //
+-vint merge(const vint v, std::vector<edge>* const nbrs, graph* const g) {
++vint merge(const vint v, std::vector<edge>* const nbrs, graph* const g, float max_com_vol) {
+   // Aggregate edges of the members of community `v`
+   // Aggregating before locking `g[v]` shortens the locking time
+   unite(v, nbrs, g);
+ 
+   // `.str < 0.0` means that modification of `g[v]` is prohibited (locked)
+-  const float vstr = g->vs[v].a->str.exchange(-1);
++  const float vstr = g->vs[v].a->str.exchange(-1); 
+ 
+   // If `.child` was modified between the previous call of `unite()` and the
+   // lock, aggregate edges again
+@@ -489,9 +495,16 @@ vint merge(const vint v, std::vector<edge>* const nbrs, graph* const g) {
+     g->n_reunite.fetch_add(1);
+   }
+ 
+-  const vint u = find_best(*g, v, vstr);
++  // if the degree volume of v's community is more than or equal to max community volume,
++  // this community will not aggregated to any other community.
++  if (max_com_vol != 0.0f && vstr >= max_com_vol) {
++    g->vs[v].a->str = vstr;
++    return v;
++  }
++
++  const vint u = find_best(*g, v, vstr, max_com_vol);
+   if (u == v) {
+-    // Rollback the strength if there is no neighbor that improves modularity
++    // Rollback the strength if there is no neighbor that improves modularity_calculator
+     g->vs[v].a->str = vstr;
+   } else {
+     // Rollback if `u` has a negative strength (i.e., `u` is locked)
+@@ -501,7 +514,7 @@ vint merge(const vint v, std::vector<edge>* const nbrs, graph* const g) {
+       g->n_fail_lock.fetch_add(1);
+       return vmax;
+     }
+-
++    
+     // `.sibling` can be accessed immediately by `unite()` after letting
+     // `g->vs[u].a->child = v`, and so set `.sibling` properly in advance
+     g->vs[v].sibling = ua.child;
+@@ -551,7 +564,7 @@ void descendants(const G& g, vint v, OutputIt it) {
+     *it++ = v;
+ }
+ 
+-graph aggregate(std::vector<std::vector<edge> > adj) {
++graph aggregate(std::vector<std::vector<edge> > adj, float max_com_vol = 0) {
+   graph      g(std::move(adj));
+   const auto ord   = merge_order(g);
+   const int  np    = omp_get_max_threads();
+@@ -570,14 +583,14 @@ graph aggregate(std::vector<std::vector<edge> > adj) {
+ 
+     #pragma omp for schedule(static, 1)
+     for (vint i = 0; i < g.n(); ++i) {
+-      pends.erase(boost::remove_if(pends, [&g, &tops, &nbrs](auto w) {
+-        const vint u = merge(w, &nbrs, &g);
++      pends.erase(boost::remove_if(pends, [&g, &tops, &nbrs, &max_com_vol](auto w) {
++        const vint u = merge(w, &nbrs, &g, max_com_vol);
+         if (u == w) tops.push_back(w);
+         return u != vmax;  // remove if the merge successed
+       }), pends.end());
+ 
+       const vint v = ord[i].first;
+-      const vint u = merge(v, &nbrs, &g);
++      const vint u = merge(v, &nbrs, &g, max_com_vol);
+       if      (u == v)    tops.push_back(v);
+       else if (u == vmax) pends.push_back(v);
+     }
+@@ -591,7 +604,7 @@ graph aggregate(std::vector<std::vector<edge> > adj) {
+     {
+       npend = pends.size();
+       for (const vint v : pends) {
+-        const vint u = merge(v, &nbrs, &g);
++        const vint u = merge(v, &nbrs, &g, max_com_vol);
+         if (u == v) tops.push_back(v);
+         assert(u != vmax);  // The merge never fails
+       }
+diff --git a/demo/reorder.cc b/reorder.hpp
+old mode 100644
+new mode 100755
+similarity index 81%
+rename from demo/reorder.cc
+rename to reorder.hpp
+index 5e0bedc..1938ddb
+--- a/demo/reorder.cc
++++ b/reorder.hpp
+@@ -3,10 +3,11 @@
+ //
+ // Author: ARAI Junya <arai.junya@lab.ntt.co.jp> <araijn@gmail.com>
+ //
++#pragma once
+ 
+ #include <boost/range/adaptor/transformed.hpp>
+ #include <boost/range/algorithm/count.hpp>
+-#include "../rabbit_order.hpp"
++#include "rabbit_order.hpp"
+ #include "edge_list.hpp"
+ 
+ using rabbit_order::vint;
+@@ -90,7 +91,7 @@ adjacency_list make_adj_list(const vint n, const RandomAccessRange& es) {
+ }
+ 
+ adjacency_list read_graph(const std::string& graphpath) {
+-  const auto edges = edge_list::read(graphpath);
++  const auto edges = edge_list::read_binary(graphpath);
+ 
+   // The number of vertices = max vertex ID + 1 (assuming IDs start from zero)
+   const auto n =
+@@ -157,27 +158,35 @@ double compute_modularity(const adjacency_list& adj, const vint* const coms) {
+   return q;
+ }
+ 
+-void detect_community(adjacency_list adj) {
+-  auto _adj = adj;  // copy `adj` because it is used for computing modularity
++#include <iostream>
++#include <fstream>
++
++std::vector<vint> detect_community(adjacency_list adj, float max_com_vol) {
++  auto _adj = adj;  // copy `adj` because it is used for computing modularity_calculator
+ 
+   std::cerr << "Detecting communities...\n";
+   const double tstart = rabbit_order::now_sec();
+   //--------------------------------------------
+-  auto       g = rabbit_order::aggregate(std::move(_adj));
+-  const auto c = std::make_unique<vint[]>(g.n());
++  auto g = rabbit_order::aggregate(std::move(_adj), max_com_vol);
++  std::vector<vint> c(g.n());
++  const auto c_mod = std::make_unique<vint[]>(g.n());
++
+   #pragma omp parallel for
+-  for (vint v = 0; v < g.n(); ++v)
++  for (vint v = 0; v < g.n(); ++v) {
+     c[v] = rabbit_order::trace_com(v, &g);
++    c_mod[v] = c[v];
++  }
+   //--------------------------------------------
+   std::cerr << "Runtime for community detection [sec]: "
+             << rabbit_order::now_sec() - tstart << std::endl;
+ 
+-  // Print the result
+-  std::copy(&c[0], &c[g.n()], std::ostream_iterator<vint>(std::cout, "\n"));
+-
+-  std::cerr << "Computing modularity of the result...\n";
+-  const double q = compute_modularity(adj, c.get());
++  const double tstart_mod = rabbit_order::now_sec();
++  std::cerr << "Computing modularity_calculator of the result...\n";
++  const double q = compute_modularity(adj, c_mod.get());
+   std::cerr << "Modularity: " << q << std::endl;
++  std::cerr << "Runtime for modularity_calculator calculation [sec]: "
++            << rabbit_order::now_sec() - tstart_mod << std::endl;
++  return c;
+ }
+ 
+ void reorder(adjacency_list adj) {
+@@ -189,38 +198,17 @@ void reorder(adjacency_list adj) {
+   //--------------------------------------------
+   std::cerr << "Runtime for permutation generation [sec]: "
+             << rabbit_order::now_sec() - tstart << std::endl;
+-
+-  // Print the result
+-  std::copy(&p[0], &p[g.n()], std::ostream_iterator<vint>(std::cout, "\n"));
+ }
+ 
+-int main(int argc, char* argv[]) {
+-  using boost::adaptors::transformed;
+-
+-  // Parse command-line arguments
+-  if (argc != 2 && (argc != 3 || std::string("-c") != argv[1])) {
+-    std::cerr << "Usage: reorder [-c] GRAPH_FILE\n"
+-              << "  -c    Print community IDs instead of a new ordering\n";
+-    exit(EXIT_FAILURE);
+-  }
+-  const std::string graphpath = argc == 3 ? argv[2] : argv[1];
+-  const bool        commode   = argc == 3;
+-
++std::vector<vint> perform_rabbit_clustering(std::string graphpath, float max_com_vol) {
+   std::cerr << "Number of threads: " << omp_get_max_threads() << std::endl;
+ 
++  std::cerr << "Reading graph ...\n";
++  const double tstart = rabbit_order::now_sec();
+   std::cerr << "Reading an edge-list file: " << graphpath << std::endl;
+   auto       adj = read_graph(graphpath);
+-  const auto m   =
+-      boost::accumulate(adj | transformed([](auto& es) {return es.size();}),
+-                        static_cast<size_t>(0));
+-  std::cerr << "Number of vertices: " << adj.size() << std::endl;
+-  std::cerr << "Number of edges: "    << m          << std::endl;
+-
+-  if (commode)
+-    detect_community(std::move(adj));
+-  else
+-    reorder(std::move(adj));
+-
+-  return EXIT_SUCCESS;
++  std::cerr << "Runtime for reading edges and creating graph object [sec]: "
++            << rabbit_order::now_sec() - tstart << std::endl;
++  
++  return detect_community(std::move(adj), max_com_vol);
+ }
+-
+-- 
+2.15.0
+
